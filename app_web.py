@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 import os
-from groq import Groq
+from Groq import Groq
 from dotenv import load_dotenv
 from datetime import datetime
 from database import (
