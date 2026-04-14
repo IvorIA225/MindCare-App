@@ -2,3 +2,5 @@ streamlit
 groq
 python-dotenv
 requests
+cryptography
+pandas
