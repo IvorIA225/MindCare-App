@@ -7,6 +7,13 @@ from cryptography.fernet import Fernet
 import os
 
 DB_PATH = "aura_data.db"
+LIMITE_BETA = 50  # Nombre maximum d'utilisateurs
+
+logging.basicConfig(
+    level=logging.WARNING,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.FileHandler("aura_errors.log")]
+)
 
 # ============================================================
 # CHIFFREMENT
@@ -45,17 +52,16 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # Table 1 — Identités anonymisées
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            id          TEXT PRIMARY KEY,
-            real_name   TEXT UNIQUE,
-            created_at  TIMESTAMP,
-            is_premium  INTEGER DEFAULT 0
+            id           TEXT PRIMARY KEY,
+            real_name    TEXT UNIQUE,
+            created_at   TIMESTAMP,
+            is_premium   INTEGER DEFAULT 0,
+            consentement INTEGER DEFAULT 0
         )
     """)
 
-    # Table 2 — Messages chiffrés
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS messages (
             message_id  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,7 +73,6 @@ def init_db():
         )
     """)
 
-    # Table 3 — Profil personnalisé persistant
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS profils (
             user_id         TEXT PRIMARY KEY,
@@ -83,26 +88,45 @@ def init_db():
         )
     """)
 
-    # Table 4 — Suivi humeur
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS humeurs (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id     TEXT,
-            score       INTEGER,
-            emoji       TEXT,
-            note        TEXT,
-            date        TEXT,
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id  TEXT,
+            score    INTEGER,
+            emoji    TEXT,
+            note     TEXT,
+            date     TEXT,
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
     """)
 
-    # Table 5 — Logs d'accès (sans données personnelles)
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS logs_acces (
+        CREATE TABLE IF NOT EXISTS compteur_quotidien (
+            user_id TEXT,
+            date    TEXT,
+            nb      INTEGER DEFAULT 0,
+            PRIMARY KEY (user_id, date)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS feedbacks (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id     TEXT,
-            action      TEXT,
-            timestamp   TIMESTAMP
+            utile       TEXT,
+            commentaire TEXT,
+            prix_mois   TEXT,
+            timestamp   TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS logs_acces (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id   TEXT,
+            action    TEXT,
+            timestamp TIMESTAMP
         )
     """)
 
@@ -112,7 +136,18 @@ def init_db():
 # ============================================================
 # GESTION UTILISATEURS
 # ============================================================
-def obtenir_ou_creer_id_anonyme(nom_reel: str) -> str:
+def compter_utilisateurs() -> int:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM users")
+    nb = c.fetchone()[0]
+    conn.close()
+    return nb
+
+def beta_pleine() -> bool:
+    return compter_utilisateurs() >= LIMITE_BETA
+
+def obtenir_ou_creer_id_anonyme(nom_reel: str, consentement: bool = False) -> str:
     if not valider_prenom(nom_reel):
         raise ValueError("Prénom invalide")
     conn = sqlite3.connect(DB_PATH)
@@ -123,10 +158,13 @@ def obtenir_ou_creer_id_anonyme(nom_reel: str) -> str:
     if result:
         user_id = result[0]
     else:
+        if beta_pleine():
+            conn.close()
+            raise OverflowError("Beta complète")
         user_id = str(uuid.uuid4())[:8]
         cursor.execute(
-            "INSERT INTO users (id, real_name, created_at, is_premium) VALUES (?, ?, ?, ?)",
-            (user_id, nom_normalise, datetime.now(), 0)
+            "INSERT INTO users (id, real_name, created_at, is_premium, consentement) VALUES (?, ?, ?, ?, ?)",
+            (user_id, nom_normalise, datetime.now(), 0, int(consentement))
         )
         conn.commit()
     conn.close()
@@ -140,30 +178,21 @@ def est_premium(user_id: str) -> bool:
     conn.close()
     return bool(row and row[0])
 
-def activer_premium(user_id: str):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("UPDATE users SET is_premium = 1 WHERE id = ?", (user_id,))
-    conn.commit()
-    conn.close()
-
 # ============================================================
-# GESTION MESSAGES
+# MESSAGES
 # ============================================================
 def sauvegarder_conversation(user_id: str, role: str, texte: str):
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        texte_chiffre = chiffrer(texte)
         cursor.execute(
             "INSERT INTO messages (user_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
-            (user_id, role, texte_chiffre, datetime.now())
+            (user_id, chiffrer(texte), role, datetime.now())
         )
         conn.commit()
         conn.close()
-        journaliser(user_id, f"message_{role}")
     except Exception as e:
-        logging.error(f"Erreur sauvegarde message : {type(e).__name__}")
+        logging.error(f"Erreur sauvegarde : {type(e).__name__}")
 
 def charger_historique(user_id: str) -> list:
     try:
@@ -175,30 +204,17 @@ def charger_historique(user_id: str) -> list:
         )
         rows = cursor.fetchall()
         conn.close()
-        return [
-            {
-                "role": r[0],
-                "content": dechiffrer(r[1]),
-                "horodatage": str(r[2])
-            }
-            for r in rows
-        ]
+        return [{"role": r[0], "content": dechiffrer(r[1]), "horodatage": str(r[2])} for r in rows]
     except Exception as e:
-        logging.error(f"Erreur chargement historique : {type(e).__name__}")
+        logging.error(f"Erreur historique : {type(e).__name__}")
         return []
 
 def compter_messages(user_id: str) -> dict:
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute(
-        "SELECT COUNT(*) FROM messages WHERE user_id = ? AND role = 'user'",
-        (user_id,)
-    )
+    c.execute("SELECT COUNT(*) FROM messages WHERE user_id = ? AND role = 'user'", (user_id,))
     nb = c.fetchone()[0]
-    c.execute(
-        "SELECT MIN(timestamp), MAX(timestamp) FROM messages WHERE user_id = ?",
-        (user_id,)
-    )
+    c.execute("SELECT MIN(timestamp), MAX(timestamp) FROM messages WHERE user_id = ?", (user_id,))
     dates = c.fetchone()
     conn.close()
     return {
@@ -210,16 +226,28 @@ def compter_messages(user_id: str) -> dict:
 def compter_messages_aujourdhui(user_id: str) -> int:
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    aujourd_hui = datetime.now().strftime("%Y-%m-%d")
     c.execute(
-        """SELECT COUNT(*) FROM messages
-           WHERE user_id = ? AND role = 'user'
-           AND timestamp >= ?""",
-        (user_id, aujourd_hui)
+        "SELECT nb FROM compteur_quotidien WHERE user_id = ? AND date = ?",
+        (user_id, datetime.now().strftime("%Y-%m-%d"))
     )
-    nb = c.fetchone()[0]
+    row = c.fetchone()
     conn.close()
-    return nb
+    return row[0] if row else 0
+
+def incrementer_compteur_quotidien(user_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO compteur_quotidien (user_id, date, nb) VALUES (?, ?, 1)
+        ON CONFLICT(user_id, date) DO UPDATE SET nb = nb + 1
+    """, (user_id, datetime.now().strftime("%Y-%m-%d")))
+    conn.commit()
+    conn.close()
+
+def verifier_limite_messages(user_id: str) -> tuple:
+    limite = 9999 if est_premium(user_id) else 20
+    nb     = compter_messages_aujourdhui(user_id)
+    return (nb < limite, nb, limite)
 
 def supprimer_historique(user_id: str):
     conn = sqlite3.connect(DB_PATH)
@@ -227,23 +255,18 @@ def supprimer_historique(user_id: str):
     c.execute("DELETE FROM messages WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()
-    journaliser(user_id, "suppression_historique")
 
 def supprimer_compte_complet(user_id: str):
-    """Supprime TOUTES les données — droit à l'oubli."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("DELETE FROM messages WHERE user_id = ?",  (user_id,))
-    c.execute("DELETE FROM profils WHERE user_id = ?",   (user_id,))
-    c.execute("DELETE FROM humeurs WHERE user_id = ?",   (user_id,))
-    c.execute("DELETE FROM logs_acces WHERE user_id = ?", (user_id,))
-    c.execute("DELETE FROM users WHERE id = ?",          (user_id,))
+    for table in ["messages", "profils", "humeurs", "compteur_quotidien", "feedbacks", "logs_acces"]:
+        c.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
+    c.execute("DELETE FROM users WHERE id = ?", (user_id,))
     conn.commit()
     conn.close()
-    logging.info(f"Compte supprimé : {user_id[:4]}****")
 
 # ============================================================
-# PROFIL PERSONNALISÉ
+# PROFIL
 # ============================================================
 def charger_profil(user_id: str) -> dict:
     try:
@@ -253,12 +276,11 @@ def charger_profil(user_id: str) -> dict:
         row = c.fetchone()
         conn.close()
         if row:
-            cols = ["user_id", "prenom", "situation", "defis", "objectifs",
-                    "humeur_generale", "preferences", "notes_aura", "derniere_maj"]
+            cols = ["user_id","prenom","situation","defis","objectifs",
+                    "humeur_generale","preferences","notes_aura","derniere_maj"]
             return dict(zip(cols, row))
         return {}
-    except Exception as e:
-        logging.error(f"Erreur chargement profil : {type(e).__name__}")
+    except:
         return {}
 
 def sauvegarder_profil(user_id: str, donnees: dict):
@@ -271,47 +293,39 @@ def sauvegarder_profil(user_id: str, donnees: dict):
                  humeur_generale, preferences, notes_aura, derniere_maj)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
-                situation       = excluded.situation,
-                defis           = excluded.defis,
-                objectifs       = excluded.objectifs,
-                humeur_generale = excluded.humeur_generale,
-                preferences     = excluded.preferences,
-                notes_aura      = excluded.notes_aura,
-                derniere_maj    = excluded.derniere_maj
+                situation=excluded.situation, defis=excluded.defis,
+                objectifs=excluded.objectifs, humeur_generale=excluded.humeur_generale,
+                preferences=excluded.preferences, notes_aura=excluded.notes_aura,
+                derniere_maj=excluded.derniere_maj
         """, (
             user_id,
-            donnees.get("prenom", ""),
-            donnees.get("situation", ""),
-            donnees.get("defis", ""),
-            donnees.get("objectifs", ""),
-            donnees.get("humeur_generale", ""),
-            donnees.get("preferences", ""),
-            donnees.get("notes_aura", ""),
-            datetime.now().strftime("%Y-%m-%d %H:%M")
+            donnees.get("prenom",""), donnees.get("situation",""),
+            donnees.get("defis",""), donnees.get("objectifs",""),
+            donnees.get("humeur_generale",""), donnees.get("preferences",""),
+            donnees.get("notes_aura",""), datetime.now().strftime("%Y-%m-%d %H:%M")
         ))
         conn.commit()
         conn.close()
     except Exception as e:
-        logging.error(f"Erreur sauvegarde profil : {type(e).__name__}")
+        logging.error(f"Erreur profil : {type(e).__name__}")
 
 # ============================================================
 # HUMEUR
 # ============================================================
 def init_humeur_table():
-    pass  # Déjà créée dans init_db()
+    pass  # Déjà dans init_db()
 
 def sauvegarder_humeur(user_id: str, score: int, emoji: str, note: str = ""):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    note_chiffree = chiffrer(note) if note else ""
     c.execute(
         "INSERT INTO humeurs (user_id, score, emoji, note, date) VALUES (?, ?, ?, ?, ?)",
-        (user_id, score, emoji, note_chiffree, datetime.now().strftime("%Y-%m-%d %H:%M"))
+        (user_id, score, emoji, chiffrer(note) if note else "", datetime.now().strftime("%Y-%m-%d %H:%M"))
     )
     conn.commit()
     conn.close()
 
-def charger_humeurs(user_id: str, jours: int = 7) -> list:
+def charger_humeurs(user_id: str, jours: int = 14) -> list:
     from datetime import timedelta
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -322,18 +336,35 @@ def charger_humeurs(user_id: str, jours: int = 7) -> list:
     )
     rows = c.fetchall()
     conn.close()
-    return [
-        {
-            "score": r[0],
-            "emoji": r[1],
-            "note": dechiffrer(r[2]) if r[2] else "",
-            "date": r[3]
-        }
-        for r in rows
-    ]
+    return [{"score": r[0], "emoji": r[1], "note": dechiffrer(r[2]) if r[2] else "", "date": r[3]} for r in rows]
 
 # ============================================================
-# LOGS (sans données personnelles)
+# FEEDBACK
+# ============================================================
+def sauvegarder_feedback(user_id: str, utile: str, commentaire: str, prix_mois: str):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO feedbacks (user_id, utile, commentaire, prix_mois, timestamp) VALUES (?, ?, ?, ?, ?)",
+        (user_id, utile, chiffrer(commentaire), prix_mois, datetime.now())
+    )
+    conn.commit()
+    conn.close()
+
+def a_deja_donne_feedback_aujourd_hui(user_id: str) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    aujourd_hui = datetime.now().strftime("%Y-%m-%d")
+    c.execute(
+        "SELECT COUNT(*) FROM feedbacks WHERE user_id = ? AND timestamp >= ?",
+        (user_id, aujourd_hui)
+    )
+    nb = c.fetchone()[0]
+    conn.close()
+    return nb > 0
+
+# ============================================================
+# LOGS
 # ============================================================
 def journaliser(user_id: str, action: str):
     try:
@@ -347,16 +378,3 @@ def journaliser(user_id: str, action: str):
         conn.close()
     except:
         pass
-
-# ============================================================
-# RATE LIMITING
-# ============================================================
-LIMITE_GRATUIT = 10
-LIMITE_PREMIUM = 9999
-
-def verifier_limite_messages(user_id: str) -> tuple[bool, int, int]:
-    """Retourne (autorisé, nb_utilisé, limite)."""
-    premium = est_premium(user_id)
-    limite  = LIMITE_PREMIUM if premium else LIMITE_GRATUIT
-    nb      = compter_messages_aujourdhui(user_id)
-    return (nb < limite, nb, limite)
