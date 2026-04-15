@@ -6,7 +6,7 @@ from datetime import datetime
 from cryptography.fernet import Fernet
 import os
 
-DB_PATH = "aura_data.db"
+DB_PATH = "aura_prod.db"
 LIMITE_BETA = 50  # Nombre maximum d'utilisateurs
 
 logging.basicConfig(
