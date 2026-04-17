@@ -15,7 +15,9 @@ from database import (
     charger_profil, sauvegarder_profil, est_premium, journaliser,
     valider_prenom, compter_utilisateurs, beta_pleine, LIMITE_BETA,
     supprimer_compte_complet, sauvegarder_feedback,
-    a_deja_donne_feedback_aujourd_hui, nettoyer_messages_corrompus
+    a_deja_donne_feedback_aujourd_hui, nettoyer_messages_corrompus,
+    obtenir_id_par_prenom, verifier_pin, definir_pin,
+    utilisateur_a_un_pin,
 )
 from dashboard import afficher_dashboard
 
@@ -387,45 +389,49 @@ html, body, [class*="css"] {
 }
 .main .block-container { padding: 0 !important; max-width: 100% !important; }
 
+/* ── SIDEBAR — bouton hamburger mobile ── */
 section[data-testid="stSidebar"] {
     background: #075e54 !important;
-    min-width: 210px !important; max-width: 210px !important;
+    min-width: 210px !important;
+    max-width: 210px !important;
+    transition: all 0.3s ease !important;
 }
-section[data-testid="stSidebar"] > div { padding: 0 !important; }
-section[data-testid="stSidebar"] * { color: #fff !important; font-family:'Segoe UI',sans-serif !important; }
-[data-testid="stSidebarCollapseButton"],[data-testid="collapsedControl"] { display:none !important; }
 
-.sb-header {
-    background:#054c43;padding:16px 14px 12px;
-    border-bottom:1px solid rgba(255,255,255,0.1);
+/* Afficher le bouton collapse natif de Streamlit sur mobile */
+@media (max-width: 768px) {
+    [data-testid="stSidebarCollapseButton"] {
+        display: flex !important;
+        background: #075e54 !important;
+        color: #fff !important;
+        border: none !important;
+        position: fixed !important;
+        top: 10px !important;
+        left: 10px !important;
+        z-index: 9999 !important;
+        width: 36px !important;
+        height: 36px !important;
+        border-radius: 50% !important;
+        align-items: center !important;
+        justify-content: center !important;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.3) !important;
+    }
+    [data-testid="stSidebarCollapseButton"] svg {
+        fill: #fff !important;
+    }
+    section[data-testid="stSidebar"] {
+        min-width: 100vw !important;
+        max-width: 100vw !important;
+    }
 }
-.sb-title { font-size:1.1rem;font-weight:700;color:#fff !important;letter-spacing:.5px; }
-.sb-sub   { font-size:10.5px;color:#b2dfdb !important;margin-top:2px;line-height:1.4; }
-.sb-user  { font-size:12px;color:#80cbc4 !important;margin-top:5px;display:flex;align-items:center;gap:5px; }
 
-section[data-testid="stSidebar"] .stRadio > div { gap:2px !important;padding:8px 10px; }
-section[data-testid="stSidebar"] .stRadio > div > label {
-    background:rgba(255,255,255,0.06) !important; border:none !important;
-    border-radius:6px !important; padding:9px 12px !important;
-    cursor:pointer; transition:background .15s;
-    font-size:13px !important; color:#e0f2f1 !important;
-    width:100% !important; margin:0 !important;
+/* Sur PC : cacher le bouton collapse */
+@media (min-width: 769px) {
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="collapsedControl"] {
+        display: none !important;
+    }
 }
-section[data-testid="stSidebar"] .stRadio > div > label:hover {
-    background:rgba(255,255,255,0.14) !important;
-}
-section[data-testid="stSidebar"] .stRadio input[type="radio"] { display:none !important; }
-
-section[data-testid="stSidebar"] .stButton > button {
-    background:rgba(255,255,255,0.08) !important; color:#e0f2f1 !important;
-    border:none !important; border-radius:6px !important;
-    font-size:12px !important; padding:7px 10px !important;
-}
-section[data-testid="stSidebar"] .stButton > button:hover {
-    background:rgba(255,255,255,0.16) !important;
-}
-section[data-testid="stSidebar"] hr { border-color:rgba(255,255,255,0.12) !important; margin:6px 0 !important; }
-
+            
 .stat-box {
     background:rgba(0,0,0,0.15);border-radius:6px;
     padding:9px 12px;margin:4px 10px;font-size:11px;
@@ -521,7 +527,7 @@ for k, v in defaults.items():
         st.session_state[k] = v
 
 # ============================================================
-# 13. LOGIN
+# 13. LOGIN — avec PIN sécurisé
 # ============================================================
 if st.session_state.user_id is None:
     nb_users         = compter_utilisateurs()
@@ -554,47 +560,130 @@ if st.session_state.user_id is None:
             st.button("📩 Liste d'attente", use_container_width=True)
         else:
             sal = salutation_heure()
-            st.markdown(f"**{sal} !** {places_restantes} place(s) restante(s).")
-            prenom_input = st.text_input("", placeholder="Ton prénom...", label_visibility="collapsed")
-            consentement = st.checkbox(
-                "Je comprends que cet outil est un **prototype expérimental** et j'accepte "
-                "que mes données soient traitées de façon **anonyme** et utilisées à des fins "
-                "de **recherche et d'amélioration** de Aura."
+            st.markdown(f"**{sal} !**")
+
+            prenom_input = st.text_input(
+                "👤 Ton prénom :",
+                placeholder="Ex: Aminata",
+                key="login_prenom"
             )
-            st.info("📱 **Sur mobile :** Menu → *Ajouter à l'écran d'accueil* pour accéder à Aura comme une vraie app !")
 
-            if st.button("✨  Rejoindre la bêta", use_container_width=True):
-                if not prenom_input.strip():
-                    st.error("Merci d'entrer ton prénom.")
-                elif not consentement:
-                    st.warning("⚠️ Tu dois accepter les conditions pour continuer.")
-                elif not valider_prenom(prenom_input.strip()):
-                    st.error("Prénom invalide (lettres uniquement, 2-50 caractères).")
-                else:
-                    try:
-                        uid = obtenir_ou_creer_id_anonyme(prenom_input.strip(), consentement=True)
-                        st.session_state.user_id  = uid
+            # Vérifier si cet utilisateur existe déjà
+            utilisateur_existant = False
+            uid_existant         = None
+            if prenom_input.strip() and valider_prenom(prenom_input.strip()):
+                uid_existant = obtenir_id_par_prenom(prenom_input.strip())
+                utilisateur_existant = uid_existant is not None
+
+            if utilisateur_existant:
+                # ── UTILISATEUR EXISTANT — demander le PIN ──
+                st.markdown(f"""
+                <div style="background:#e8f5e9;border-radius:8px;padding:9px 14px;
+                            font-size:13px;color:#2e7d32;margin:8px 0;
+                            border-left:3px solid #25d366;">
+                    👋 Bon retour <strong>{prenom_input.strip().capitalize()}</strong> !
+                    Entre ton code PIN pour accéder à tes conversations.
+                </div>
+                """, unsafe_allow_html=True)
+
+                pin_input = st.text_input(
+                    "🔐 Code PIN (4 chiffres) :",
+                    type="password",
+                    max_chars=4,
+                    placeholder="••••",
+                    key="login_pin_existant"
+                )
+
+                if st.button("🔓 Se connecter", use_container_width=True):
+                    if not pin_input or len(pin_input) != 4 or not pin_input.isdigit():
+                        st.error("Le PIN doit contenir exactement 4 chiffres.")
+                    elif not verifier_pin(uid_existant, pin_input):
+                        st.error("❌ Code PIN incorrect. Réessaie.")
+                        journaliser(uid_existant, "tentative_pin_echouee")
+                    else:
+                        # ✅ PIN correct — connexion
+                        st.session_state.user_id  = uid_existant
                         st.session_state.prenom   = prenom_input.strip().capitalize()
-                        st.session_state.profil   = charger_profil(uid)
-
-                        # ✅ Charger l'historique propre depuis la BDD
-                        historique = charger_historique(uid)
+                        st.session_state.profil   = charger_profil(uid_existant)
+                        historique = charger_historique(uid_existant)
                         if historique:
                             st.session_state.messages = historique
                             st.session_state.conversation_initiee = True
-                        else:
+                        journaliser(uid_existant, "connexion")
+                        st.rerun()
+
+                st.markdown("""
+                <div style="font-size:11px;color:#999;text-align:center;margin-top:8px;">
+                    PIN oublié ? Contacte le support Aura.
+                </div>
+                """, unsafe_allow_html=True)
+
+            else:
+                # ── NOUVEL UTILISATEUR — créer un compte avec PIN ──
+                if prenom_input.strip():
+                    st.markdown("""
+                    <div style="background:#fff3e0;border-radius:8px;padding:9px 14px;
+                                font-size:13px;color:#e65100;margin:8px 0;
+                                border-left:3px solid #ff9800;">
+                        ✨ Nouveau sur Aura ? Crée ton accès sécurisé.
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                pin_nouveau = st.text_input(
+                    "🔐 Crée ton code PIN (4 chiffres) :",
+                    type="password",
+                    max_chars=4,
+                    placeholder="••••",
+                    key="login_pin_nouveau"
+                )
+                pin_confirm = st.text_input(
+                    "🔐 Confirme ton code PIN :",
+                    type="password",
+                    max_chars=4,
+                    placeholder="••••",
+                    key="login_pin_confirm"
+                )
+
+                consentement = st.checkbox(
+                    "Je comprends que cet outil est un **prototype expérimental** et j'accepte "
+                    "que mes données soient traitées de façon **anonyme** et utilisées à des fins "
+                    "de **recherche et d'amélioration** de Aura."
+                )
+
+                st.info("📱 **Sur mobile :** Menu → *Ajouter à l'écran d'accueil*")
+
+                if st.button("✨ Créer mon compte", use_container_width=True):
+                    if not prenom_input.strip():
+                        st.error("Entre ton prénom.")
+                    elif not valider_prenom(prenom_input.strip()):
+                        st.error("Prénom invalide (lettres uniquement, 2-50 caractères).")
+                    elif not pin_nouveau or len(pin_nouveau) != 4 or not pin_nouveau.isdigit():
+                        st.error("Le PIN doit contenir exactement 4 chiffres.")
+                    elif pin_nouveau != pin_confirm:
+                        st.error("Les deux PIN ne correspondent pas.")
+                    elif not consentement:
+                        st.warning("⚠️ Tu dois accepter les conditions pour continuer.")
+                    else:
+                        try:
+                            uid = obtenir_ou_creer_id_anonyme(
+                                prenom_input.strip(), consentement=True
+                            )
+                            definir_pin(uid, pin_nouveau)
+                            st.session_state.user_id  = uid
+                            st.session_state.prenom   = prenom_input.strip().capitalize()
+                            st.session_state.profil   = charger_profil(uid)
                             st.session_state.messages = []
                             st.session_state.conversation_initiee = False
+                            journaliser(uid, "inscription")
+                            st.rerun()
+                        except OverflowError:
+                            st.error(f"🔒 Bêta complète ({LIMITE_BETA} participants).")
+                        except ValueError as e:
+                            st.error(str(e))
+                        except Exception as e:
+                            logging.error(f"Erreur inscription : {type(e).__name__} — {e}")
+                            st.error("Une erreur est survenue. Réessaie.")
 
-                        journaliser(uid, "connexion")
-                        st.rerun()
-                    except OverflowError:
-                        st.error(f"🔒 Bêta complète ({LIMITE_BETA} participants).")
-                    except ValueError as e:
-                        st.error(str(e))
-                    except Exception as e:
-                        logging.error(f"Erreur login : {type(e).__name__} — {e}")
-                        st.error("Une erreur est survenue. Réessaie.")
     st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 

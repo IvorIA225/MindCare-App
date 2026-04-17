@@ -5,6 +5,7 @@ import re
 from datetime import datetime
 from cryptography.fernet import Fernet
 import os
+import hashlib
 
 DB_PATH    = "aura_data.db"
 LIMITE_BETA = 50
@@ -133,6 +134,7 @@ def init_db():
 
     conn.commit()
     conn.close()
+    ajouter_colonne_pin()
 
 # ============================================================
 # NETTOYAGE BDD — supprime les entrées corrompues
@@ -202,6 +204,62 @@ def est_premium(user_id: str) -> bool:
     row = c.fetchone()
     conn.close()
     return bool(row and row[0])
+
+def hasher_pin(pin: str) -> str:
+    """Hash le PIN pour ne jamais le stocker en clair."""
+    return hashlib.sha256(pin.encode()).hexdigest()
+
+def ajouter_colonne_pin():
+    """Migration : ajoute la colonne pin_hash si elle n'existe pas."""
+    conn   = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN pin_hash TEXT DEFAULT NULL")
+        conn.commit()
+    except:
+        pass  # Colonne déjà existante
+    conn.close()
+
+def definir_pin(user_id: str, pin: str):
+    """Définit ou met à jour le PIN d'un utilisateur."""
+    conn   = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE users SET pin_hash = ? WHERE id = ?",
+        (hasher_pin(pin), user_id)
+    )
+    conn.commit()
+    conn.close()
+
+def verifier_pin(user_id: str, pin: str) -> bool:
+    """Vérifie que le PIN saisi correspond au PIN stocké."""
+    conn   = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT pin_hash FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row or not row[0]:
+        return False
+    return row[0] == hasher_pin(pin)
+
+def utilisateur_a_un_pin(user_id: str) -> bool:
+    """Vérifie si l'utilisateur a déjà défini un PIN."""
+    conn   = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT pin_hash FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return bool(row and row[0])
+
+def obtenir_id_par_prenom(nom_reel: str) -> str | None:
+    """Retourne l'ID d'un utilisateur existant par son prénom."""
+    conn          = sqlite3.connect(DB_PATH)
+    cursor        = conn.cursor()
+    nom_normalise = nom_reel.strip().capitalize()
+    cursor.execute("SELECT id FROM users WHERE real_name = ?", (nom_normalise,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else None
 
 # ============================================================
 # MESSAGES — VERSION CORRIGÉE
@@ -391,6 +449,7 @@ def sauvegarder_profil(user_id: str, donnees: dict):
         conn.close()
     except Exception as e:
         logging.error(f"Erreur sauvegarder_profil : {type(e).__name__}")
+
 
 # ============================================================
 # HUMEUR
