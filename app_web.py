@@ -703,7 +703,7 @@ if st.session_state.user_id is None:
                         if historique:
                             st.session_state.messages = historique
                             st.session_state.conversation_initiee = True
-                            st.session_state.message_retour = f"Content(e) de te revoir, {prenom_input.strip().capitalize()} 👋"
+                            st.session_state.message_retour = f"Ravis de te revoir, {prenom_input.strip().capitalize()} 👋"
                         journaliser(uid_existant, "connexion")
                         st.rerun()
                 st.caption("PIN oublié ? aura.civ@gmail.com")
