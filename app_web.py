@@ -1,23 +1,38 @@
 import streamlit as st
-import requests
 import os
-import random
 import json
 import logging
+import random
 import pandas as pd
 from groq import Groq
-from dotenv import load_dotenv
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+load_dotenv()
 from database import (
-    init_db, obtenir_ou_creer_id_anonyme, sauvegarder_conversation,
-    charger_historique, supprimer_historique, compter_messages,
-    verifier_limite_messages, incrementer_compteur_quotidien,
-    charger_profil, sauvegarder_profil, est_premium, journaliser,
-    valider_prenom, compter_utilisateurs, beta_pleine, LIMITE_BETA,
-    supprimer_compte_complet, sauvegarder_feedback,
-    a_deja_donne_feedback_aujourd_hui, nettoyer_messages_corrompus,
-    obtenir_id_par_prenom, verifier_pin, definir_pin,
-    utilisateur_a_un_pin,
+    init_db,
+    obtenir_ou_creer_id_anonyme,
+    obtenir_id_par_prenom,
+    sauvegarder_conversation,
+    charger_historique,
+    supprimer_historique,
+    compter_messages,
+    verifier_limite_messages,
+    incrementer_compteur_quotidien,
+    charger_profil,
+    sauvegarder_profil,
+    est_premium,
+    journaliser,
+    valider_prenom,
+    valider_pin,
+    compter_utilisateurs,
+    beta_pleine,
+    LIMITE_BETA,
+    supprimer_compte_complet,
+    sauvegarder_feedback,
+    a_deja_donne_feedback_aujourd_hui,
+    nettoyer_messages_corrompus,
+    verifier_pin,
+    definir_pin,
 )
 from dashboard import afficher_dashboard
 
@@ -35,30 +50,33 @@ logging.basicConfig(
 # ============================================================
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 if not GROQ_API_KEY:
-    st.error("❌ Clé API Groq manquante.")
+    st.error("❌ Clé API Groq manquante dans les secrets.")
     st.stop()
 
 client = Groq(api_key=GROQ_API_KEY)
 
+DUREE_SESSION_HEURES = 2  # Session expire après 2h
+
 # ============================================================
-# 2. SALUTATION
+# 2. SALUTATION DYNAMIQUE
 # ============================================================
 def salutation_heure() -> str:
     h = datetime.now().hour
     if 5 <= h < 12:    return "Bonjour"
-    elif 12 <= h < 18: return "Salut"
+    elif 12 <= h < 18: return "Bon après-midi"
     elif 18 <= h < 22: return "Bonsoir"
     else:              return "Salut"
 
 # ============================================================
-# 3. PROMPT
+# 3. PROMPT SYSTÈME
 # ============================================================
-SYSTEM_PROMPT_BASE = """Tu es Aura, assistant de bien-être dédiée aux étudiants de Côte d'Ivoire.
+SYSTEM_PROMPT_BASE = """Tu es Aura, assistante de bien-être dédiée
+aux étudiants de Côte d'Ivoire.
 
 ## PERSONNALITÉ
-- Chaleureuse, empathique, grand frère bienveillant
+- Chaleureuse, empathique, grande sœur bienveillante
 - Expressions africaines douces si appropriées
-- Direct, doux, humour léger si possible
+- Directe, douce, humour léger si possible
 
 ## RÈGLES
 1. Valide les émotions AVANT de conseiller
@@ -71,7 +89,7 @@ SYSTEM_PROMPT_BASE = """Tu es Aura, assistant de bien-être dédiée aux étudia
 ## URGENCES
 Pensées suicidaires → 110/111 · 185 · 180
 
-Tu parles TOUJOURS en français."""
+Tu parles TOUJOURS en français. Tu es Aura — une lumière douce. ✨"""
 
 
 def construire_prompt(prenom: str, profil: dict) -> str:
@@ -90,6 +108,7 @@ def construire_prompt(prenom: str, profil: dict) -> str:
 - Notes Aura      : {profil.get('notes_aura','aucune')}
 - Dernière session: {profil.get('derniere_maj','?')}"""
 
+
 # ============================================================
 # 4. MISE À JOUR PROFIL IA
 # ============================================================
@@ -100,7 +119,7 @@ def mettre_a_jour_profil_ia(user_id, prenom, historique, profil):
         r = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": f"""
-Extrais les infos importantes. JSON uniquement, aucun texte autour :
+Extrais les infos importantes sur l'utilisateur. JSON uniquement, sans texte autour :
 {{"situation":"...","defis":"...","objectifs":"...","humeur_generale":"...","preferences":"...","notes_aura":"..."}}
 Profil actuel : {json.dumps(profil, ensure_ascii=False)}
 Échanges : {json.dumps(historique[-6:], ensure_ascii=False)}"""}],
@@ -117,7 +136,7 @@ Profil actuel : {json.dumps(profil, ensure_ascii=False)}
 # 5. EXERCICES
 # ============================================================
 EXERCICES = {
-    "Respiration 4-7-8": {
+    "🌬️ Respiration 4-7-8": {
         "description": "Calme l'anxiété en 2 minutes.",
         "etapes": [
             ("Inspire", 4,  "Inspire lentement par le nez... 1, 2, 3, 4"),
@@ -125,7 +144,7 @@ EXERCICES = {
             ("Expire",  8,  "Expire lentement par la bouche... 1 à 8"),
         ], "repetitions": 4, "couleur": "#075e54"
     },
-    "Ancrage 5-4-3-2-1": {
+    "🌿 Ancrage 5-4-3-2-1": {
         "description": "Reviens au moment présent.",
         "etapes": [
             ("👁️ Vois",   15, "Nomme 5 choses que tu vois..."),
@@ -135,7 +154,7 @@ EXERCICES = {
             ("👅 Goûte",  10, "1 goût dans ta bouche..."),
         ], "repetitions": 1, "couleur": "#128c7e"
     },
-    "Gratitude (3 min)": {
+    "🙏 Gratitude (3 min)": {
         "description": "Change ta perspective.",
         "etapes": [
             ("Pense",   30, "3 choses positives d'aujourd'hui..."),
@@ -143,7 +162,7 @@ EXERCICES = {
             ("Retiens", 20, "Grave ces moments..."),
         ], "repetitions": 1, "couleur": "#25d366"
     },
-    "Pomodoro": {
+    "🎯 Pomodoro": {
         "description": "Travaille mieux, procrastine moins.",
         "etapes": [
             ("Prépare",   60,   "Pose ton téléphone, ouvre ton cours..."),
@@ -157,21 +176,20 @@ EXERCICES = {
 # 6. FONCTIONS IA
 # ============================================================
 def obtenir_reponse(historique: list, prenom: str, profil: dict) -> str:
-    # Filtrer l'historique avant envoi à Groq
     historique_propre = [
         {"role": m["role"], "content": m["content"]}
         for m in historique
-        if (m.get("role") in ("user", "assistant")
+        if (m.get("role") in ("user","assistant")
             and m.get("content")
-            and m["content"] not in ("user", "assistant")
+            and m["content"] not in ("user","assistant")
             and len(m["content"].strip()) >= 2)
     ]
     if not historique_propre:
-        return f"{salutation_heure()} {prenom} ✨ Comment puis-je t'aider aujourd'hui ?"
+        return f"{salutation_heure()} {prenom} ✨ Comment puis-je t'aider ?"
     try:
         r = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[{"role": "system", "content": construire_prompt(prenom, profil)}] + historique_propre,
+            messages=[{"role":"system","content":construire_prompt(prenom, profil)}] + historique_propre,
             temperature=0.75, max_tokens=400,
         )
         return r.choices[0].message.content
@@ -182,7 +200,9 @@ def obtenir_reponse(historique: list, prenom: str, profil: dict) -> str:
 def transcrire_audio(fichier_audio) -> str:
     try:
         t = client.audio.transcriptions.create(
-            model="whisper-large-v3", file=fichier_audio, language="fr"
+            model="whisper-large-v3",
+            file=fichier_audio,
+            language="fr"
         )
         return t.text
     except Exception as e:
@@ -197,12 +217,11 @@ def bulle_bot(texte: str, heure: str = None):
     th    = texte.replace("\n\n","<br><br>").replace("\n","<br>")
     st.markdown(f"""
     <div style="display:flex;justify-content:flex-start;margin:2px 0;padding:0 8px;">
-      <div style="
-        background:#fff;border-radius:0 8px 8px 8px;
-        padding:8px 10px 4px;max-width:78%;min-width:80px;
-        font-family:'Segoe UI',sans-serif;font-size:14.5px;
-        line-height:1.55;color:#111;
-        box-shadow:0 1px 2px rgba(0,0,0,0.13);word-wrap:break-word;">
+      <div style="background:#fff;border-radius:0 8px 8px 8px;
+                  padding:8px 10px 4px;max-width:78%;min-width:80px;
+                  font-family:'Segoe UI',sans-serif;font-size:14.5px;
+                  line-height:1.55;color:#111;
+                  box-shadow:0 1px 2px rgba(0,0,0,0.13);word-wrap:break-word;">
         {th}
         <div style="font-size:11px;color:#999;text-align:right;margin-top:3px;">{heure}</div>
       </div>
@@ -215,14 +234,14 @@ def bulle_user(texte: str, heure: str = None, est_vocal: bool = False):
     icone = "🎤 " if est_vocal else ""
     st.markdown(f"""
     <div style="display:flex;justify-content:flex-end;margin:2px 0;padding:0 8px;">
-      <div style="
-        background:#dcf8c6;border-radius:8px 0 8px 8px;
-        padding:8px 10px 4px;max-width:78%;min-width:80px;
-        font-family:'Segoe UI',sans-serif;font-size:14.5px;
-        line-height:1.55;color:#111;
-        box-shadow:0 1px 2px rgba(0,0,0,0.13);word-wrap:break-word;">
+      <div style="background:#dcf8c6;border-radius:8px 0 8px 8px;
+                  padding:8px 10px 4px;max-width:78%;min-width:80px;
+                  font-family:'Segoe UI',sans-serif;font-size:14.5px;
+                  line-height:1.55;color:#111;
+                  box-shadow:0 1px 2px rgba(0,0,0,0.13);word-wrap:break-word;">
         {icone}{th}
-        <div style="display:flex;align-items:center;justify-content:flex-end;gap:3px;margin-top:3px;">
+        <div style="display:flex;align-items:center;justify-content:flex-end;
+                    gap:3px;margin-top:3px;">
           <span style="font-size:11px;color:#999;">{heure}</span>
           <span style="color:#4fc3f7;font-size:13px;">✓✓</span>
         </div>
@@ -244,10 +263,10 @@ def message_securite():
     st.markdown("""
     <div style="display:flex;justify-content:center;margin:8px 8px 4px;">
       <div style="background:#fff9c4;border-radius:8px;padding:9px 16px;
-                  font-size:12.5px;color:#7a6a00;text-align:center;
-                  max-width:85%;box-shadow:0 1px 2px rgba(0,0,0,0.08);
+                  font-size:12.5px;color:#7a6a00;text-align:center;max-width:85%;
+                  box-shadow:0 1px 2px rgba(0,0,0,0.08);
                   font-family:'Segoe UI',sans-serif;line-height:1.5;">
-        🔒 Tes messages sont chiffrés. Aura est un prototype confidentiel.
+        🔒 Prototype expérimental · Messages chiffrés · Données anonymisées
       </div>
     </div>
     """, unsafe_allow_html=True)
@@ -257,10 +276,8 @@ def message_securite():
 # ============================================================
 def afficher_exercices():
     st.markdown("""
-    <div style="background:#075e54;border-radius:0;padding:14px 20px;
-                margin:-20px -24px 16px;">
-        <h2 style="color:#fff;margin:0;font-size:1.1rem;
-                   font-family:'Segoe UI',sans-serif;">🧘 Exercices guidés</h2>
+    <div style="background:#075e54;padding:14px 20px;margin:-14px -18px 16px;">
+        <h2 style="color:#fff;margin:0;font-size:1.1rem;">🧘 Exercices guidés</h2>
         <p style="color:#b2dfdb;margin:2px 0 0;font-size:0.8rem;">
             Techniques pour ton bien-être quotidien</p>
     </div>
@@ -271,14 +288,12 @@ def afficher_exercices():
     couleur = ex["couleur"]
 
     st.markdown(f"""
-    <div style="background:#fff;border-radius:8px;padding:12px 16px;
-                margin:10px 0;box-shadow:0 1px 3px rgba(0,0,0,0.1);
-                border-left:4px solid {couleur};">
+    <div style="background:#fff;border-radius:8px;padding:12px 16px;margin:10px 0;
+                box-shadow:0 1px 3px rgba(0,0,0,0.1);border-left:4px solid {couleur};">
         <strong style="color:{couleur};font-size:14px;">{choix}</strong><br>
         <span style="font-size:13px;color:#555;">{ex['description']}</span><br>
         <span style="font-size:12px;color:#999;">
-            {ex['repetitions']} répétition(s) · {len(ex['etapes'])} étapes
-        </span>
+            {ex['repetitions']} répétition(s) · {len(ex['etapes'])} étapes</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -368,7 +383,57 @@ def afficher_feedback(user_id: str):
         st.rerun()
 
 # ============================================================
-# 10. CONFIG PAGE
+# 10. PAGE CONFIDENTIALITÉ
+# ============================================================
+def afficher_confidentialite():
+    st.markdown("""
+    <div style="background:#075e54;padding:14px 20px;margin:-14px -18px 16px;">
+        <h2 style="color:#fff;margin:0;font-size:1.1rem;">🔒 Confidentialité</h2>
+        <p style="color:#b2dfdb;margin:2px 0 0;font-size:0.8rem;">
+            Politique de protection des données</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div style="background:#fff;border-radius:8px;padding:18px 20px;
+                box-shadow:0 1px 3px rgba(0,0,0,0.08);font-size:13.5px;
+                color:#333;line-height:1.9;">
+
+    <strong style="color:#075e54;font-size:15px;">Ce que nous collectons</strong><br>
+    • Ton prénom (transformé en ID anonyme interne)<br>
+    • Tes messages avec Aura (chiffrés AES-256)<br>
+    • Ton humeur quotidienne si tu la partages<br><br>
+
+    <strong style="color:#075e54;font-size:15px;">Ce que nous ne faisons JAMAIS</strong><br>
+    • Vendre tes données à des tiers<br>
+    • Cibler de la publicité<br>
+    • Partager avec assurances, employeurs ou universités<br>
+    • Lire tes conversations sans ton accord<br><br>
+
+    <strong style="color:#075e54;font-size:15px;">Tes droits</strong><br>
+    • <strong>Suppression totale</strong> : via Tableau de bord → Supprimer mon compte<br>
+    • <strong>Accès</strong> : toutes tes données sont visibles dans l'app<br>
+    • <strong>Portabilité</strong> : contacte-nous pour un export<br><br>
+
+    <strong style="color:#075e54;font-size:15px;">Sécurité technique</strong><br>
+    • Chiffrement Fernet (AES-128-CBC) des messages<br>
+    • PIN hashé SHA-256 (jamais stocké en clair)<br>
+    • Anonymisation UUID à l'inscription<br>
+    • Blocage après 5 tentatives de PIN échouées<br><br>
+
+    <strong style="color:#075e54;font-size:15px;">Conformité légale</strong><br>
+    Conforme à la <strong>Loi ivoirienne 2013-451</strong> sur la cybersécurité
+    et au règlement ARTCI sur les données personnelles.<br><br>
+
+    <strong style="color:#075e54;font-size:15px;">Contact</strong><br>
+    📧 aura.civ@gmail.com<br>
+    🗓️ Dernière mise à jour : Avril 2026
+
+    </div>
+    """, unsafe_allow_html=True)
+
+# ============================================================
+# 11. CONFIG PAGE
 # ============================================================
 st.set_page_config(
     page_title="Aura", page_icon="✨",
@@ -376,37 +441,165 @@ st.set_page_config(
 )
 
 # ============================================================
-# 11. CSS WHATSAPP
+# 12. CSS WHATSAPP + MOBILE
 # ============================================================
 st.markdown("""
 <style>
 html, body, [class*="css"] {
     font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif !important;
 }
+
 .stApp {
     background-color: #eae6df !important;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'%3E%3Cg fill='%23c8bdb0' fill-opacity='0.12'%3E%3Ccircle cx='25' cy='25' r='5'/%3E%3Ccircle cx='75' cy='25' r='3'/%3E%3Ccircle cx='125' cy='25' r='5'/%3E%3Ccircle cx='175' cy='25' r='3'/%3E%3Ccircle cx='50' cy='50' r='3'/%3E%3Ccircle cx='100' cy='50' r='6'/%3E%3Ccircle cx='150' cy='50' r='3'/%3E%3Ccircle cx='25' cy='75' r='3'/%3E%3Ccircle cx='75' cy='75' r='6'/%3E%3Ccircle cx='125' cy='75' r='3'/%3E%3Ccircle cx='175' cy='75' r='5'/%3E%3Ccircle cx='25' cy='125' r='5'/%3E%3Ccircle cx='75' cy='125' r='3'/%3E%3Ccircle cx='125' cy='125' r='5'/%3E%3Ccircle cx='175' cy='125' r='3'/%3E%3Ccircle cx='50' cy='150' r='3'/%3E%3Ccircle cx='100' cy='150' r='5'/%3E%3Ccircle cx='150' cy='150' r='3'/%3E%3C/g%3E%3C/svg%3E") !important;
 }
+
 .main .block-container { padding: 0 !important; max-width: 100% !important; }
 
-/* ── SIDEBAR — bouton hamburger mobile ── */
+/* ── SIDEBAR ── */
 section[data-testid="stSidebar"] {
     background: #075e54 !important;
     min-width: 210px !important;
     max-width: 210px !important;
     transition: all 0.3s ease !important;
 }
+section[data-testid="stSidebar"] > div { padding: 0 !important; }
+section[data-testid="stSidebar"] * {
+    color: #fff !important;
+    font-family: 'Segoe UI', sans-serif !important;
+}
 
-/* Afficher le bouton collapse natif de Streamlit sur mobile */
+/* Bouton collapse — caché sur PC, visible sur mobile */
+[data-testid="stSidebarCollapseButton"] { display: none !important; }
+[data-testid="collapsedControl"]        { display: none !important; }
+
+.sb-header {
+    background: #054c43;
+    padding: 16px 14px 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+.sb-title { font-size: 1.1rem; font-weight: 700; color: #fff !important; letter-spacing: .5px; }
+.sb-sub   { font-size: 10.5px; color: #b2dfdb !important; margin-top: 2px; line-height: 1.4; }
+.sb-user  {
+    font-size: 12px; color: #80cbc4 !important; margin-top: 5px;
+    display: flex; align-items: center; gap: 5px;
+}
+
+section[data-testid="stSidebar"] .stRadio > div { gap: 2px !important; padding: 8px 10px; }
+section[data-testid="stSidebar"] .stRadio > div > label {
+    background: rgba(255,255,255,0.06) !important;
+    border: none !important; border-radius: 6px !important;
+    padding: 9px 12px !important; cursor: pointer; transition: background .15s;
+    font-size: 13px !important; color: #e0f2f1 !important;
+    width: 100% !important; margin: 0 !important;
+}
+section[data-testid="stSidebar"] .stRadio > div > label:hover {
+    background: rgba(255,255,255,0.14) !important;
+}
+section[data-testid="stSidebar"] .stRadio input[type="radio"] { display: none !important; }
+
+section[data-testid="stSidebar"] .stButton > button {
+    background: rgba(255,255,255,0.08) !important; color: #e0f2f1 !important;
+    border: none !important; border-radius: 6px !important;
+    font-size: 12px !important; padding: 7px 10px !important;
+}
+section[data-testid="stSidebar"] .stButton > button:hover {
+    background: rgba(255,255,255,0.16) !important;
+}
+section[data-testid="stSidebar"] hr { border-color: rgba(255,255,255,0.12) !important; margin: 6px 0 !important; }
+
+.stat-box {
+    background: rgba(0,0,0,0.15); border-radius: 6px;
+    padding: 9px 12px; margin: 4px 10px; font-size: 11px;
+    color: #b2dfdb !important; line-height: 1.9;
+}
+
+/* ── TOPBAR ── */
+.wa-topbar {
+    background: #075e54; padding: 9px 16px;
+    display: flex; align-items: center; gap: 12px;
+    position: sticky; top: 0; z-index: 200;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+.wa-avatar {
+    width: 38px; height: 38px; border-radius: 50%;
+    background: linear-gradient(135deg,#25d366,#128c7e);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17px; flex-shrink: 0;
+}
+.wa-name   { font-size: 15px; font-weight: 600; color: #fff; }
+.wa-status { font-size: 12px; color: #b2dfdb; }
+
+/* ── Messages ── */
+.messages-container { padding: 4px 0; min-height: 60vh; }
+[data-testid="stChatMessage"] {
+    background: transparent !important; border: none !important;
+    box-shadow: none !important; padding: 0 !important; margin: 0 !important;
+}
+[data-testid="stChatMessage"] > div { background: transparent !important; }
+
+/* ── SAISIE TEXTE ── */
+div[data-testid="stChatInput"] {
+    background: #f0f0f0 !important; border: none !important;
+    border-top: 1px solid #ddd !important; border-radius: 0 !important;
+    box-shadow: none !important; padding: 8px 12px !important;
+}
+div[data-testid="stChatInput"] > div {
+    background: transparent !important; border: none !important;
+    box-shadow: none !important; padding: 0 !important;
+    display: flex !important; align-items: center !important; gap: 8px !important;
+}
+div[data-testid="stChatInput"] textarea {
+    font-family: 'Segoe UI', sans-serif !important; font-size: 15px !important;
+    color: #111 !important; background: #fff !important;
+    border: none !important; border-radius: 22px !important;
+    padding: 10px 16px !important; min-height: 44px !important;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1) !important; resize: none !important;
+}
+div[data-testid="stChatInput"] textarea::placeholder {
+    color: #999 !important; font-size: 14px !important;
+}
+div[data-testid="stChatInput"] button {
+    background: #25d366 !important; border-radius: 50% !important;
+    width: 44px !important; height: 44px !important; min-width: 44px !important;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2) !important;
+    border: none !important; flex-shrink: 0 !important;
+}
+div[data-testid="stChatInput"] button:hover { background: #128c7e !important; }
+div[data-testid="stChatInput"] button svg { fill: #fff !important; width: 20px !important; height: 20px !important; }
+
+/* ── Login ── */
+.login-bg {
+    min-height: 100vh; display: flex; align-items: center;
+    justify-content: center; padding: 20px;
+}
+.login-card {
+    background: #fff; border-radius: 10px; overflow: hidden;
+    max-width: 420px; width: 100%; box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+}
+.login-top {
+    background: #075e54; padding: 28px 20px 20px; text-align: center;
+}
+.login-body { padding: 20px 24px; }
+
+/* ── Pages ── */
+.page-content { padding: 14px 18px; }
+.stAlert { border-radius: 8px !important; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-thumb { background: #c8b8a2; border-radius: 10px; }
+
+/* ── MOBILE ── */
 @media (max-width: 768px) {
+    /* Bouton hamburger ☰ visible sur mobile */
     [data-testid="stSidebarCollapseButton"] {
         display: flex !important;
         background: #075e54 !important;
-        color: #fff !important;
         border: none !important;
         position: fixed !important;
-        top: 10px !important;
-        left: 10px !important;
+        top: 8px !important;
+        left: 8px !important;
         z-index: 9999 !important;
         width: 36px !important;
         height: 36px !important;
@@ -414,120 +607,59 @@ section[data-testid="stSidebar"] {
         align-items: center !important;
         justify-content: center !important;
         box-shadow: 0 2px 6px rgba(0,0,0,0.3) !important;
+        cursor: pointer !important;
     }
-    [data-testid="stSidebarCollapseButton"] svg {
-        fill: #fff !important;
-    }
+    [data-testid="stSidebarCollapseButton"] svg { fill: #fff !important; }
+
     section[data-testid="stSidebar"] {
         min-width: 100vw !important;
         max-width: 100vw !important;
+        position: fixed !important;
+        z-index: 9998 !important;
     }
-}
 
-/* Sur PC : cacher le bouton collapse */
-@media (min-width: 769px) {
-    [data-testid="stSidebarCollapseButton"],
-    [data-testid="collapsedControl"] {
-        display: none !important;
+    .wa-topbar { padding: 7px 10px 7px 50px; }
+    .wa-name { font-size: 14px; }
+    .messages-container { padding: 4px 0; }
+    div[data-testid="stChatInput"] { padding: 6px 8px !important; }
+    div[data-testid="stChatInput"] button {
+        width: 40px !important; height: 40px !important; min-width: 40px !important;
     }
-}
-            
-.stat-box {
-    background:rgba(0,0,0,0.15);border-radius:6px;
-    padding:9px 12px;margin:4px 10px;font-size:11px;
-    color:#b2dfdb !important;line-height:1.9;
-}
-
-.wa-topbar {
-    background:#075e54;padding:9px 16px;
-    display:flex;align-items:center;gap:12px;
-    position:sticky;top:0;z-index:200;
-    box-shadow:0 2px 4px rgba(0,0,0,0.2);
-}
-.wa-avatar {
-    width:38px;height:38px;border-radius:50%;
-    background:linear-gradient(135deg,#25d366,#128c7e);
-    display:flex;align-items:center;justify-content:center;
-    font-size:17px;flex-shrink:0;
-}
-.wa-name   { font-size:15px;font-weight:600;color:#fff;font-family:'Segoe UI',sans-serif; }
-.wa-status { font-size:12px;color:#b2dfdb;font-family:'Segoe UI',sans-serif; }
-
-.messages-container { padding:4px 0;min-height:60vh; }
-
-[data-testid="stChatMessage"] {
-    background:transparent !important;border:none !important;
-    box-shadow:none !important;padding:0 !important;margin:0 !important;
-}
-[data-testid="stChatMessage"] > div { background:transparent !important; }
-
-div[data-testid="stChatInput"] {
-    background:#f0f0f0 !important;border:none !important;
-    border-top:1px solid #ddd !important;border-radius:0 !important;
-    box-shadow:none !important;padding:8px 12px !important;
-}
-div[data-testid="stChatInput"] > div {
-    background:transparent !important;border:none !important;
-    box-shadow:none !important;padding:0 !important;
-    display:flex !important;align-items:center !important;gap:8px !important;
-}
-div[data-testid="stChatInput"] textarea {
-    font-family:'Segoe UI',sans-serif !important;font-size:15px !important;
-    color:#111 !important;background:#fff !important;
-    border:none !important;border-radius:22px !important;
-    padding:10px 16px !important;min-height:44px !important;
-    box-shadow:0 1px 2px rgba(0,0,0,0.1) !important;resize:none !important;
-}
-div[data-testid="stChatInput"] textarea::placeholder { color:#999 !important;font-size:14px !important; }
-div[data-testid="stChatInput"] button {
-    background:#25d366 !important;border-radius:50% !important;
-    width:44px !important;height:44px !important;min-width:44px !important;
-    box-shadow:0 2px 4px rgba(0,0,0,0.2) !important;
-    border:none !important;flex-shrink:0 !important;
-}
-div[data-testid="stChatInput"] button:hover { background:#128c7e !important; }
-div[data-testid="stChatInput"] button svg { fill:#fff !important;width:20px !important;height:20px !important; }
-
-.login-bg { min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px; }
-.login-card {
-    background:#fff;border-radius:10px;padding:0;
-    max-width:420px;width:100%;
-    box-shadow:0 4px 20px rgba(0,0,0,0.12);overflow:hidden;
-}
-.login-top {
-    background:#075e54;padding:28px 20px 20px;text-align:center;
-}
-.login-body { padding:24px 28px; }
-
-.page-content { padding:14px 18px; }
-.stAlert { border-radius:8px !important; }
-::-webkit-scrollbar { width:4px; }
-::-webkit-scrollbar-thumb { background:#c8b8a2;border-radius:10px; }
-
-@media (max-width:768px) {
-    section[data-testid="stSidebar"] { min-width:100% !important;max-width:100% !important; }
-    .wa-topbar { padding:7px 10px; }
-    .wa-name { font-size:14px; }
-    div[data-testid="stChatInput"] { padding:6px 8px !important; }
 }
 </style>
 """, unsafe_allow_html=True)
 
 # ============================================================
-# 12. SESSION STATE
+# 13. SESSION STATE
 # ============================================================
 defaults = {
     "user_id": None, "prenom": None, "messages": [],
     "conversation_initiee": False, "page": "💬 Chat",
     "profil": {}, "ex_actif": False, "ex_etape": 0, "ex_rep": 0,
     "transcription_en_attente": "", "session_messages_count": 0,
+    "heure_connexion": None,
+    "pin_tentatives": 0, "pin_bloque_jusqu": None,
+    "message_retour": None,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
 # ============================================================
-# 13. LOGIN — avec PIN sécurisé
+# 14. VÉRIFICATION EXPIRATION SESSION
+# ============================================================
+if st.session_state.user_id and st.session_state.heure_connexion:
+    duree_h = (datetime.now() - st.session_state.heure_connexion).total_seconds() / 3600
+    if duree_h > DUREE_SESSION_HEURES:
+        st.warning(f"⏰ Session expirée après {DUREE_SESSION_HEURES}h. Reconnecte-toi.")
+        for k in ["user_id","prenom","messages","conversation_initiee",
+                  "profil","heure_connexion","pin_tentatives","pin_bloque_jusqu"]:
+            st.session_state[k] = None if k not in ("messages",) else []
+        st.session_state.conversation_initiee = False
+        st.rerun()
+
+# ============================================================
+# 15. LOGIN
 # ============================================================
 if st.session_state.user_id is None:
     nb_users         = compter_utilisateurs()
@@ -547,7 +679,7 @@ if st.session_state.user_id is None:
           </div>
           <div class="login-body">
             <div style="background:#e8f5e9;border-radius:6px;padding:7px 12px;
-                        margin-bottom:16px;font-size:12px;color:#2e7d32;text-align:center;">
+                        font-size:12px;color:#2e7d32;text-align:center;">
                 🧪 Bêta · {nb_users}/{LIMITE_BETA} participants
             </div>
           </div>
@@ -555,28 +687,27 @@ if st.session_state.user_id is None:
         """, unsafe_allow_html=True)
 
         if beta_pleine():
-            st.error(f"🔒 Bêta complète ({LIMITE_BETA} participants).")
+            st.error(f"🔒 Bêta complète ({LIMITE_BETA} participants). Merci !")
             st.text_input("Contact WhatsApp :", placeholder="+225 07 00 00 00 00")
             st.button("📩 Liste d'attente", use_container_width=True)
         else:
             sal = salutation_heure()
-            st.markdown(f"**{sal} !**")
+            st.markdown(f"**{sal} !** {places_restantes} place(s) disponible(s).")
 
             prenom_input = st.text_input(
                 "👤 Ton prénom :",
-                placeholder="Ex: Aminata",
-                key="login_prenom"
+                placeholder="Ex: Aminata", key="login_prenom"
             )
 
-            # Vérifier si cet utilisateur existe déjà
+            # Détecter si l'utilisateur existe déjà
+            uid_existant        = None
             utilisateur_existant = False
-            uid_existant         = None
             if prenom_input.strip() and valider_prenom(prenom_input.strip()):
                 uid_existant = obtenir_id_par_prenom(prenom_input.strip())
                 utilisateur_existant = uid_existant is not None
 
             if utilisateur_existant:
-                # ── UTILISATEUR EXISTANT — demander le PIN ──
+                # ── UTILISATEUR EXISTANT — connexion avec PIN ──
                 st.markdown(f"""
                 <div style="background:#e8f5e9;border-radius:8px;padding:9px 14px;
                             font-size:13px;color:#2e7d32;margin:8px 0;
@@ -586,78 +717,93 @@ if st.session_state.user_id is None:
                 </div>
                 """, unsafe_allow_html=True)
 
+                # Vérifier si bloqué
+                if st.session_state.pin_bloque_jusqu:
+                    if datetime.now() < st.session_state.pin_bloque_jusqu:
+                        reste = int((st.session_state.pin_bloque_jusqu - datetime.now()).total_seconds())
+                        st.error(f"🔒 Trop de tentatives échouées. Réessaie dans {reste} secondes.")
+                        st.stop()
+                    else:
+                        st.session_state.pin_tentatives   = 0
+                        st.session_state.pin_bloque_jusqu = None
+
                 pin_input = st.text_input(
                     "🔐 Code PIN (4 chiffres) :",
-                    type="password",
-                    max_chars=4,
-                    placeholder="••••",
-                    key="login_pin_existant"
+                    type="password", max_chars=4,
+                    placeholder="••••", key="login_pin_existant"
                 )
 
+                tentatives_restantes = 5 - st.session_state.pin_tentatives
+                if st.session_state.pin_tentatives > 0:
+                    st.warning(f"⚠️ {tentatives_restantes} tentative(s) restante(s) avant blocage.")
+
                 if st.button("🔓 Se connecter", use_container_width=True):
-                    if not pin_input or len(pin_input) != 4 or not pin_input.isdigit():
+                    if not pin_input or not valider_pin(pin_input):
                         st.error("Le PIN doit contenir exactement 4 chiffres.")
                     elif not verifier_pin(uid_existant, pin_input):
-                        st.error("❌ Code PIN incorrect. Réessaie.")
+                        st.session_state.pin_tentatives += 1
                         journaliser(uid_existant, "tentative_pin_echouee")
+                        if st.session_state.pin_tentatives >= 5:
+                            st.session_state.pin_bloque_jusqu = datetime.now() + timedelta(minutes=5)
+                            st.error("🔒 5 tentatives échouées. Compte bloqué 5 minutes.")
+                            journaliser(uid_existant, "blocage_pin")
+                        else:
+                            reste = 5 - st.session_state.pin_tentatives
+                            st.error(f"❌ PIN incorrect. {reste} tentative(s) restante(s).")
                     else:
-                        # ✅ PIN correct — connexion
-                        st.session_state.user_id  = uid_existant
-                        st.session_state.prenom   = prenom_input.strip().capitalize()
-                        st.session_state.profil   = charger_profil(uid_existant)
+                        # ✅ Connexion réussie
+                        st.session_state.user_id        = uid_existant
+                        st.session_state.prenom         = prenom_input.strip().capitalize()
+                        st.session_state.profil         = charger_profil(uid_existant)
+                        st.session_state.heure_connexion = datetime.now()
+                        st.session_state.pin_tentatives  = 0
+                        st.session_state.pin_bloque_jusqu = None
                         historique = charger_historique(uid_existant)
                         if historique:
                             st.session_state.messages = historique
                             st.session_state.conversation_initiee = True
+                            st.session_state.message_retour = f"Content(e) de te revoir, {prenom_input.strip().capitalize()} 👋"
                         journaliser(uid_existant, "connexion")
                         st.rerun()
 
-                st.markdown("""
-                <div style="font-size:11px;color:#999;text-align:center;margin-top:8px;">
-                    PIN oublié ? Contacte le support Aura.
-                </div>
-                """, unsafe_allow_html=True)
+                st.caption("PIN oublié ? Contacte le support : aura.civ@gmail.com")
 
             else:
-                # ── NOUVEL UTILISATEUR — créer un compte avec PIN ──
-                if prenom_input.strip():
+                # ── NOUVEL UTILISATEUR — création de compte ──
+                if prenom_input.strip() and valider_prenom(prenom_input.strip()):
                     st.markdown("""
                     <div style="background:#fff3e0;border-radius:8px;padding:9px 14px;
                                 font-size:13px;color:#e65100;margin:8px 0;
                                 border-left:3px solid #ff9800;">
-                        ✨ Nouveau sur Aura ? Crée ton accès sécurisé.
+                        ✨ Nouveau sur Aura ? Crée ton accès en quelques secondes.
                     </div>
                     """, unsafe_allow_html=True)
 
                 pin_nouveau = st.text_input(
                     "🔐 Crée ton code PIN (4 chiffres) :",
-                    type="password",
-                    max_chars=4,
-                    placeholder="••••",
-                    key="login_pin_nouveau"
+                    type="password", max_chars=4,
+                    placeholder="••••", key="login_pin_nouveau"
                 )
                 pin_confirm = st.text_input(
                     "🔐 Confirme ton code PIN :",
-                    type="password",
-                    max_chars=4,
-                    placeholder="••••",
-                    key="login_pin_confirm"
+                    type="password", max_chars=4,
+                    placeholder="••••", key="login_pin_confirm"
                 )
 
                 consentement = st.checkbox(
-                    "Je comprends que cet outil est un **prototype expérimental** et j'accepte "
-                    "que mes données soient traitées de façon **anonyme** et utilisées à des fins "
-                    "de **recherche et d'amélioration** de Aura."
+                    "Je comprends que cet outil est un **prototype expérimental** "
+                    "et j'accepte que mes données soient traitées de façon **anonyme** "
+                    "et utilisées à des fins de **recherche et d'amélioration** de Aura."
                 )
 
-                st.info("📱 **Sur mobile :** Menu → *Ajouter à l'écran d'accueil*")
+                st.info("📱 **Sur mobile :** Menu → *Ajouter à l'écran d'accueil* pour accéder comme une app !")
 
-                if st.button("✨ Créer mon compte", use_container_width=True):
+                if st.button("✨  Créer mon compte", use_container_width=True):
                     if not prenom_input.strip():
                         st.error("Entre ton prénom.")
                     elif not valider_prenom(prenom_input.strip()):
                         st.error("Prénom invalide (lettres uniquement, 2-50 caractères).")
-                    elif not pin_nouveau or len(pin_nouveau) != 4 or not pin_nouveau.isdigit():
+                    elif not pin_nouveau or not valider_pin(pin_nouveau):
                         st.error("Le PIN doit contenir exactement 4 chiffres.")
                     elif pin_nouveau != pin_confirm:
                         st.error("Les deux PIN ne correspondent pas.")
@@ -669,10 +815,11 @@ if st.session_state.user_id is None:
                                 prenom_input.strip(), consentement=True
                             )
                             definir_pin(uid, pin_nouveau)
-                            st.session_state.user_id  = uid
-                            st.session_state.prenom   = prenom_input.strip().capitalize()
-                            st.session_state.profil   = charger_profil(uid)
-                            st.session_state.messages = []
+                            st.session_state.user_id         = uid
+                            st.session_state.prenom          = prenom_input.strip().capitalize()
+                            st.session_state.profil          = {}
+                            st.session_state.heure_connexion = datetime.now()
+                            st.session_state.messages        = []
                             st.session_state.conversation_initiee = False
                             journaliser(uid, "inscription")
                             st.rerun()
@@ -688,13 +835,13 @@ if st.session_state.user_id is None:
     st.stop()
 
 # ============================================================
-# 14. VARIABLES
+# 16. VARIABLES ACTIVES
 # ============================================================
 prenom = st.session_state.prenom
 profil = st.session_state.profil
 
 # ============================================================
-# 15. TOPBAR
+# 17. TOPBAR
 # ============================================================
 nb_users = compter_utilisateurs()
 st.markdown(f"""
@@ -715,7 +862,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ============================================================
-# 16. SIDEBAR
+# 18. SIDEBAR
 # ============================================================
 with st.sidebar:
     st.markdown(f"""
@@ -730,10 +877,15 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    page = st.radio("", ["💬 Chat","🧘 Exercices","📊 Tableau de bord"], label_visibility="collapsed")
+    page = st.radio(
+        "",
+        ["💬 Chat", "🧘 Exercices", "📊 Tableau de bord", "🔒 Confidentialité"],
+        label_visibility="collapsed"
+    )
     st.session_state.page = page
 
     st.markdown("<hr>", unsafe_allow_html=True)
+
     ca, cb = st.columns(2)
     with ca:
         if st.button("🗑️ Nouveau", use_container_width=True):
@@ -743,24 +895,36 @@ with st.sidebar:
             st.rerun()
     with cb:
         if st.button("🚪 Changer", use_container_width=True):
-            for k in ["user_id","prenom","messages","conversation_initiee","profil"]:
-                st.session_state[k] = None if k != "messages" else []
+            for k in ["user_id","prenom","messages","conversation_initiee",
+                      "profil","heure_connexion","pin_tentatives","pin_bloque_jusqu"]:
+                st.session_state[k] = None if k not in ("messages",) else []
             st.session_state.conversation_initiee = False
             st.rerun()
 
     st.markdown("<hr>", unsafe_allow_html=True)
+
     stats = compter_messages(st.session_state.user_id)
     _, nb_today, limite = verifier_limite_messages(st.session_state.user_id)
+
+    # Temps restant de session
+    if st.session_state.heure_connexion:
+        duree_m = int((datetime.now() - st.session_state.heure_connexion).total_seconds() / 60)
+        restant = max(0, DUREE_SESSION_HEURES * 60 - duree_m)
+    else:
+        restant = DUREE_SESSION_HEURES * 60
+
     st.markdown(f"""
     <div class="stat-box">
         💬 {stats['nb_messages']} messages total<br>
         📅 {stats['premiere_session']}<br>
         🕐 {stats['derniere_session']}<br>
-        📊 Aujourd'hui : {nb_today}/{limite}
+        📊 Aujourd'hui : {nb_today}/{limite}<br>
+        ⏱️ Session : {restant}min restantes
     </div>
     """, unsafe_allow_html=True)
 
     st.markdown("<hr>", unsafe_allow_html=True)
+
     if st.button("🗑️ Effacer historique", use_container_width=True):
         supprimer_historique(st.session_state.user_id)
         st.session_state.messages = []
@@ -783,7 +947,7 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
 # ============================================================
-# 17. ROUTEUR
+# 19. ROUTEUR
 # ============================================================
 page = st.session_state.page
 
@@ -799,23 +963,24 @@ elif page == "📊 Tableau de bord":
     afficher_feedback(st.session_state.user_id)
     st.markdown('</div>', unsafe_allow_html=True)
 
+elif page == "🔒 Confidentialité":
+    st.markdown('<div class="page-content">', unsafe_allow_html=True)
+    afficher_confidentialite()
+    st.markdown('</div>', unsafe_allow_html=True)
+
 else:
     # ── CHAT ──
     sal = salutation_heure()
 
-    # ✅ MESSAGE DE BIENVENUE — logique corrigée
+    # Message de bienvenue
     if not st.session_state.conversation_initiee:
         historique_bdd = charger_historique(st.session_state.user_id)
-
         if historique_bdd:
-            # Utilisateur qui revient — on affiche son historique tel quel
             st.session_state.messages = historique_bdd
             st.session_state.conversation_initiee = True
-            # Petit message de retour affiché visuellement seulement
             st.session_state.message_retour = f"Content(e) de te revoir, {prenom} 👋"
         else:
-            # Nouvel utilisateur — message de bienvenue
-            msg_bienvenue = (
+            msg = (
                 f"{sal} {prenom} ✨\n\n"
                 f"Je suis **Aura**, ton espace de bien-être personnalisé dédié "
                 f"à tous les étudiants de Côte d'Ivoire. Je suis là pour t'écouter, "
@@ -824,28 +989,25 @@ else:
                 f"Comment puis-je t'aider aujourd'hui ?\n\n"
                 f"Tu peux aussi explorer les exercices ou ton tableau de bord."
             )
-            # ✅ Sauvegarde dans la BDD avec le bon ordre
-            sauvegarder_conversation(st.session_state.user_id, "assistant", msg_bienvenue)
+            sauvegarder_conversation(st.session_state.user_id, "assistant", msg)
             st.session_state.messages = [
-                {"role": "assistant", "content": msg_bienvenue,
-                 "horodatage": datetime.now().strftime("%H:%M")}
+                {"role":"assistant","content":msg,
+                 "horodatage":datetime.now().strftime("%H:%M")}
             ]
             st.session_state.conversation_initiee = True
             st.session_state.message_retour = None
 
-    # ── Affichage messages ──
+    # Affichage messages
     st.markdown('<div class="messages-container">', unsafe_allow_html=True)
     message_securite()
 
     dates_affichees = set()
     for m in st.session_state.messages:
-        h      = m.get("horodatage", "")
-        # Extraction heure propre
-        if len(h) >= 16:   heure = h[11:16];  date_msg = h[:10]
-        elif len(h) == 5:  heure = h;          date_msg = datetime.now().strftime("%Y-%m-%d")
+        h = m.get("horodatage","")
+        if len(h) >= 16:   heure = h[11:16]; date_msg = h[:10]
+        elif len(h) == 5:  heure = h;        date_msg = datetime.now().strftime("%Y-%m-%d")
         else:              heure = datetime.now().strftime("%H:%M"); date_msg = datetime.now().strftime("%Y-%m-%d")
 
-        # Séparateur de date
         if date_msg not in dates_affichees:
             dates_affichees.add(date_msg)
             try:
@@ -856,11 +1018,8 @@ else:
                 label = date_msg
             separateur_date(label)
 
-        # ✅ Ignorer les entrées corrompues à l'affichage
-        contenu = m.get("content", "")
-        if (not contenu
-                or contenu in ("user", "assistant")
-                or len(contenu.strip()) < 2):
+        contenu = m.get("content","")
+        if not contenu or contenu in ("user","assistant") or len(contenu.strip()) < 2:
             continue
 
         if m["role"] == "assistant":
@@ -868,14 +1027,13 @@ else:
         else:
             bulle_user(contenu, heure, est_vocal=m.get("vocal", False))
 
-    # Message de retour discret
     if st.session_state.get("message_retour"):
         separateur_date(st.session_state.message_retour)
         st.session_state.message_retour = None
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Zone vocale ──
+    # Zone vocale
     st.markdown("""
     <div style="background:#f0f0f0;border-top:1px solid #e0e0e0;padding:7px 12px;">
         <span style="font-size:12px;color:#666;">🎤 Note vocale — parle directement à Aura</span>
@@ -883,7 +1041,6 @@ else:
     """, unsafe_allow_html=True)
 
     audio_file = st.audio_input("Enregistre", label_visibility="collapsed", key="audio_input")
-
     if audio_file is not None:
         with st.spinner("🎤 Transcription..."):
             texte_transcrit = transcrire_audio(audio_file)
@@ -909,8 +1066,9 @@ else:
                     st.session_state.messages.append(
                         {"role":"user","content":prompt,"horodatage":heure_now,"vocal":True}
                     )
-                    st.session_state.session_messages_count += 1
-                    hg = [{"role":m["role"],"content":m["content"]} for m in st.session_state.messages if m.get("content") not in ("user","assistant")]
+                    st.session_state.session_messages_count = st.session_state.get("session_messages_count",0) + 1
+                    hg = [{"role":m["role"],"content":m["content"]} for m in st.session_state.messages
+                          if m.get("content") not in ("user","assistant")]
                     with st.spinner(""):
                         rep = obtenir_reponse(hg, prenom, profil)
                     heure_rep = datetime.now().strftime("%H:%M")
@@ -923,7 +1081,7 @@ else:
         else:
             st.warning("Impossible de transcrire. Écris ton message.")
 
-    # ── Saisie texte ──
+    # Saisie texte
     if prompt := st.chat_input("Exprime-toi librement, je t'écoute..."):
         autorise, _, lim = verifier_limite_messages(st.session_state.user_id)
         if not autorise:
@@ -939,17 +1097,14 @@ else:
         sauvegarder_conversation(st.session_state.user_id, "user", prompt)
         incrementer_compteur_quotidien(st.session_state.user_id)
         st.session_state.messages.append({"role":"user","content":prompt,"horodatage":heure_now})
-        st.session_state.session_messages_count += 1
+        st.session_state.session_messages_count = st.session_state.get("session_messages_count",0) + 1
 
-        # ✅ Historique propre envoyé à Groq
         hg = [
-            {"role": m["role"], "content": m["content"]}
+            {"role":m["role"],"content":m["content"]}
             for m in st.session_state.messages
-            if (m.get("content")
-                and m["content"] not in ("user","assistant")
+            if (m.get("content") and m["content"] not in ("user","assistant")
                 and len(m["content"].strip()) >= 2)
         ]
-
         with st.spinner(""):
             rep = obtenir_reponse(hg, prenom, profil)
 
@@ -963,5 +1118,5 @@ else:
 
         st.rerun()
 
-    if st.session_state.session_messages_count >= 6:
+    if st.session_state.get("session_messages_count", 0) >= 6:
         afficher_feedback(st.session_state.user_id)

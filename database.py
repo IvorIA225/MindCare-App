@@ -2,14 +2,17 @@ import sqlite3
 import uuid
 import logging
 import re
+import hashlib
+import os
 from datetime import datetime
 from cryptography.fernet import Fernet
-import os
-import hashlib
 
-DB_PATH    = "aura_data.db"
+DB_PATH     = "aura_data.db"
 LIMITE_BETA = 50
 
+# ============================================================
+# LOGGING
+# ============================================================
 logging.basicConfig(
     level=logging.WARNING,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -17,25 +20,33 @@ logging.basicConfig(
 )
 
 # ============================================================
-# CHIFFREMENT
+# CHIFFREMENT — OBLIGATOIRE
 # ============================================================
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "").encode()
-fernet = Fernet(ENCRYPTION_KEY) if ENCRYPTION_KEY else None
+
+if not ENCRYPTION_KEY:
+    raise RuntimeError(
+        "❌ ENCRYPTION_KEY manquante. Générez-en une avec :\n"
+        "python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\"\n"
+        "Puis ajoutez-la dans votre .env ou Streamlit Secrets."
+    )
+
+fernet = Fernet(ENCRYPTION_KEY)
 
 def chiffrer(texte: str) -> str:
-    if fernet and texte:
+    if texte:
         try:
             return fernet.encrypt(texte.encode()).decode()
-        except:
-            return texte
+        except Exception as e:
+            logging.error(f"Erreur chiffrement : {e}")
     return texte
 
 def dechiffrer(texte: str) -> str:
-    if fernet and texte:
+    if texte:
         try:
             return fernet.decrypt(texte.encode()).decode()
         except:
-            return texte
+            return texte  # Déjà en clair ou corrompu
     return texte
 
 # ============================================================
@@ -46,8 +57,48 @@ def valider_prenom(prenom: str) -> bool:
         return False
     return bool(re.match(r"^[a-zA-ZÀ-ÿ\s'\-]+$", prenom.strip()))
 
+def valider_pin(pin: str) -> bool:
+    return bool(pin and len(pin) == 4 and pin.isdigit())
+
 # ============================================================
-# INITIALISATION
+# PIN — SÉCURITÉ
+# ============================================================
+def hasher_pin(pin: str) -> str:
+    return hashlib.sha256(pin.encode()).hexdigest()
+
+def definir_pin(user_id: str, pin: str):
+    conn   = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE users SET pin_hash = ? WHERE id = ?",
+        (hasher_pin(pin), user_id)
+    )
+    conn.commit()
+    conn.close()
+
+def verifier_pin(user_id: str, pin: str) -> bool:
+    conn   = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT pin_hash FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row or not row[0]:
+        return False
+    return row[0] == hasher_pin(pin)
+
+def obtenir_id_par_prenom(nom_reel: str) -> str | None:
+    conn   = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id FROM users WHERE real_name = ?",
+        (nom_reel.strip().capitalize(),)
+    )
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else None
+
+# ============================================================
+# INITIALISATION BDD
 # ============================================================
 def init_db():
     conn   = sqlite3.connect(DB_PATH)
@@ -59,11 +110,11 @@ def init_db():
             real_name    TEXT UNIQUE,
             created_at   TIMESTAMP,
             is_premium   INTEGER DEFAULT 0,
-            consentement INTEGER DEFAULT 0
+            consentement INTEGER DEFAULT 0,
+            pin_hash     TEXT    DEFAULT NULL
         )
     """)
 
-    # ✅ Table messages avec colonnes explicites et contrainte CHECK
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS messages (
             message_id  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -132,33 +183,37 @@ def init_db():
         )
     """)
 
+    # Migration : ajoute pin_hash si colonne absente (ancienne BDD)
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN pin_hash TEXT DEFAULT NULL")
+    except:
+        pass
+
     conn.commit()
     conn.close()
-    ajouter_colonne_pin()
 
 # ============================================================
-# NETTOYAGE BDD — supprime les entrées corrompues
+# NETTOYAGE DONNÉES CORROMPUES
 # ============================================================
-def nettoyer_messages_corrompus(user_id: str):
-    """Supprime les messages dont le contenu est 'user' ou 'assistant' (inversion de colonnes)."""
+def nettoyer_messages_corrompus(user_id: str) -> int:
     conn   = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
         DELETE FROM messages
         WHERE user_id = ?
         AND (
-            content IN ('user', 'assistant')
+            content IN ('user','assistant')
             OR content IS NULL
             OR content = ''
             OR length(content) < 2
         )
     """, (user_id,))
-    nb_supprimes = cursor.rowcount
+    nb = cursor.rowcount
     conn.commit()
     conn.close()
-    if nb_supprimes > 0:
-        logging.warning(f"Nettoyage BDD : {nb_supprimes} messages corrompus supprimés pour {user_id[:4]}****")
-    return nb_supprimes
+    if nb > 0:
+        logging.warning(f"Nettoyage : {nb} messages corrompus supprimés pour {user_id[:4]}****")
+    return nb
 
 # ============================================================
 # GESTION UTILISATEURS
@@ -205,101 +260,30 @@ def est_premium(user_id: str) -> bool:
     conn.close()
     return bool(row and row[0])
 
-def hasher_pin(pin: str) -> str:
-    """Hash le PIN pour ne jamais le stocker en clair."""
-    return hashlib.sha256(pin.encode()).hexdigest()
-
-def ajouter_colonne_pin():
-    """Migration : ajoute la colonne pin_hash si elle n'existe pas."""
-    conn   = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("ALTER TABLE users ADD COLUMN pin_hash TEXT DEFAULT NULL")
-        conn.commit()
-    except:
-        pass  # Colonne déjà existante
-    conn.close()
-
-def definir_pin(user_id: str, pin: str):
-    """Définit ou met à jour le PIN d'un utilisateur."""
-    conn   = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE users SET pin_hash = ? WHERE id = ?",
-        (hasher_pin(pin), user_id)
-    )
-    conn.commit()
-    conn.close()
-
-def verifier_pin(user_id: str, pin: str) -> bool:
-    """Vérifie que le PIN saisi correspond au PIN stocké."""
-    conn   = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT pin_hash FROM users WHERE id = ?", (user_id,))
-    row = cursor.fetchone()
-    conn.close()
-    if not row or not row[0]:
-        return False
-    return row[0] == hasher_pin(pin)
-
-def utilisateur_a_un_pin(user_id: str) -> bool:
-    """Vérifie si l'utilisateur a déjà défini un PIN."""
-    conn   = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT pin_hash FROM users WHERE id = ?", (user_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return bool(row and row[0])
-
-def obtenir_id_par_prenom(nom_reel: str) -> str | None:
-    """Retourne l'ID d'un utilisateur existant par son prénom."""
-    conn          = sqlite3.connect(DB_PATH)
-    cursor        = conn.cursor()
-    nom_normalise = nom_reel.strip().capitalize()
-    cursor.execute("SELECT id FROM users WHERE real_name = ?", (nom_normalise,))
-    result = cursor.fetchone()
-    conn.close()
-    return result[0] if result else None
-
 # ============================================================
-# MESSAGES — VERSION CORRIGÉE
+# MESSAGES
 # ============================================================
 def sauvegarder_conversation(user_id: str, role: str, texte: str):
-    """
-    Sauvegarde un message.
-    ORDRE CORRECT : user_id, role, content, timestamp
-    role  = 'user' ou 'assistant'  (jamais le texte du message)
-    texte = le contenu réel du message
-    """
-    # Validation défensive
     if role not in ("user", "assistant"):
-        logging.error(f"Role invalide : '{role}' — message non sauvegardé")
+        logging.error(f"Role invalide : '{role}'")
         return
     if not texte or not texte.strip():
-        logging.error("Contenu vide — message non sauvegardé")
+        logging.error("Contenu vide — non sauvegardé")
         return
-
     try:
         conn   = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        # ✅ ORDRE GARANTI : (user_id, role, content, timestamp)
         cursor.execute(
-            """INSERT INTO messages (user_id, role, content, timestamp)
-               VALUES (?, ?, ?, ?)""",
+            "INSERT INTO messages (user_id, role, content, timestamp) VALUES (?,?,?,?)",
             (user_id, role, chiffrer(texte), datetime.now().isoformat())
         )
         conn.commit()
         conn.close()
     except Exception as e:
-        logging.error(f"Erreur sauvegarder_conversation : {type(e).__name__} — {e}")
+        logging.error(f"Erreur sauvegarde : {type(e).__name__} — {e}")
 
 def charger_historique(user_id: str) -> list:
-    """
-    Charge l'historique en filtrant strictement les données valides.
-    """
-    # D'abord nettoyer les entrées corrompues
     nettoyer_messages_corrompus(user_id)
-
     try:
         conn   = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -307,52 +291,41 @@ def charger_historique(user_id: str) -> list:
             """SELECT role, content, timestamp
                FROM messages
                WHERE user_id = ?
-                 AND role IN ('user', 'assistant')
+                 AND role IN ('user','assistant')
                  AND content IS NOT NULL
                  AND content != ''
-                 AND content NOT IN ('user', 'assistant')
+                 AND content NOT IN ('user','assistant')
                  AND length(content) >= 2
                ORDER BY message_id ASC""",
             (user_id,)
         )
         rows = cursor.fetchall()
         conn.close()
-
         messages_valides = []
         for r in rows:
             role      = r[0]
             contenu   = dechiffrer(r[1])
             horodatage = str(r[2]) if r[2] else datetime.now().isoformat()
-
-            # Vérification finale : le contenu déchiffré est-il valide ?
-            if (role in ("user", "assistant")
+            if (role in ("user","assistant")
                     and contenu
-                    and contenu not in ("user", "assistant")
+                    and contenu not in ("user","assistant")
                     and len(contenu.strip()) >= 2):
                 messages_valides.append({
                     "role":       role,
                     "content":    contenu,
                     "horodatage": horodatage
                 })
-
         return messages_valides
-
     except Exception as e:
-        logging.error(f"Erreur charger_historique : {type(e).__name__} — {e}")
+        logging.error(f"Erreur historique : {type(e).__name__} — {e}")
         return []
 
 def compter_messages(user_id: str) -> dict:
     conn = sqlite3.connect(DB_PATH)
     c    = conn.cursor()
-    c.execute(
-        "SELECT COUNT(*) FROM messages WHERE user_id=? AND role='user'",
-        (user_id,)
-    )
+    c.execute("SELECT COUNT(*) FROM messages WHERE user_id=? AND role='user'", (user_id,))
     nb = c.fetchone()[0]
-    c.execute(
-        "SELECT MIN(timestamp), MAX(timestamp) FROM messages WHERE user_id=?",
-        (user_id,)
-    )
+    c.execute("SELECT MIN(timestamp), MAX(timestamp) FROM messages WHERE user_id=?", (user_id,))
     dates = c.fetchone()
     conn.close()
     return {
@@ -404,7 +377,7 @@ def supprimer_compte_complet(user_id: str):
     conn.close()
 
 # ============================================================
-# PROFIL
+# PROFIL PERSONNALISÉ
 # ============================================================
 def charger_profil(user_id: str) -> dict:
     try:
@@ -448,8 +421,7 @@ def sauvegarder_profil(user_id: str, donnees: dict):
         conn.commit()
         conn.close()
     except Exception as e:
-        logging.error(f"Erreur sauvegarder_profil : {type(e).__name__}")
-
+        logging.error(f"Erreur profil : {type(e).__name__}")
 
 # ============================================================
 # HUMEUR
@@ -462,7 +434,8 @@ def sauvegarder_humeur(user_id: str, score: int, emoji: str, note: str = ""):
     c    = conn.cursor()
     c.execute(
         "INSERT INTO humeurs (user_id,score,emoji,note,date) VALUES (?,?,?,?,?)",
-        (user_id, score, emoji, chiffrer(note) if note else "",
+        (user_id, score, emoji,
+         chiffrer(note) if note else "",
          datetime.now().strftime("%Y-%m-%d %H:%M"))
     )
     conn.commit()
@@ -479,7 +452,12 @@ def charger_humeurs(user_id: str, jours: int = 14) -> list:
     )
     rows = c.fetchall()
     conn.close()
-    return [{"score":r[0],"emoji":r[1],"note":dechiffrer(r[2]) if r[2] else "","date":r[3]} for r in rows]
+    return [
+        {"score":r[0],"emoji":r[1],
+         "note": dechiffrer(r[2]) if r[2] else "",
+         "date":r[3]}
+        for r in rows
+    ]
 
 # ============================================================
 # FEEDBACK
@@ -489,7 +467,7 @@ def sauvegarder_feedback(user_id: str, utile: str, commentaire: str, prix_mois: 
     c    = conn.cursor()
     c.execute(
         "INSERT INTO feedbacks (user_id,utile,commentaire,prix_mois,timestamp) VALUES (?,?,?,?,?)",
-        (user_id, utile, chiffrer(commentaire), prix_mois, datetime.now())
+        (user_id, utile, chiffrer(commentaire) if commentaire else "", prix_mois, datetime.now())
     )
     conn.commit()
     conn.close()
