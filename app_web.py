@@ -456,22 +456,48 @@ html, body, [class*="css"] {
 
 .main .block-container { padding: 0 !important; max-width: 100% !important; }
 
-/* ── SIDEBAR ── */
+/* ── SIDEBAR — bouton hamburger mobile ── */
 section[data-testid="stSidebar"] {
     background: #075e54 !important;
     min-width: 210px !important;
     max-width: 210px !important;
     transition: all 0.3s ease !important;
 }
-section[data-testid="stSidebar"] > div { padding: 0 !important; }
-section[data-testid="stSidebar"] * {
-    color: #fff !important;
-    font-family: 'Segoe UI', sans-serif !important;
+
+/* Afficher le bouton collapse natif de Streamlit sur mobile */
+@media (max-width: 768px) {
+    [data-testid="stSidebarCollapseButton"] {
+        display: flex !important;
+        background: #075e54 !important;
+        color: #fff !important;
+        border: none !important;
+        position: fixed !important;
+        top: 10px !important;
+        left: 10px !important;
+        z-index: 9999 !important;
+        width: 36px !important;
+        height: 36px !important;
+        border-radius: 50% !important;
+        align-items: center !important;
+        justify-content: center !important;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.3) !important;
+    }
+    [data-testid="stSidebarCollapseButton"] svg {
+        fill: #fff !important;
+    }
+    section[data-testid="stSidebar"] {
+        min-width: 100vw !important;
+        max-width: 100vw !important;
+    }
 }
 
-/* Bouton collapse — caché sur PC, visible sur mobile */
-[data-testid="stSidebarCollapseButton"] { display: none !important; }
-[data-testid="collapsedControl"]        { display: none !important; }
+/* Sur PC : cacher le bouton collapse */
+@media (min-width: 769px) {
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="collapsedControl"] {
+        display: none !important;
+    }
+}
 
 .sb-header {
     background: #054c43;
@@ -879,7 +905,7 @@ with st.sidebar:
 
     page = st.radio(
         "",
-        ["💬 Chat", "🧘 Exercices", "📊 Tableau de bord", "🔒 Confidentialité"],
+        ["Chat", "Exercices", "Tableau de bord", "Confidentialité"],
         label_visibility="collapsed"
     )
     st.session_state.page = page
@@ -888,16 +914,16 @@ with st.sidebar:
 
     ca, cb = st.columns(2)
     with ca:
-        if st.button("🗑️ Nouveau", use_container_width=True):
-            st.session_state.messages = []
+        if st.button("Nouvelle discussion", use_container_width=True):
+            st.session_state.messages = [ ]
             st.session_state.conversation_initiee = False
             st.session_state.session_messages_count = 0
             st.rerun()
     with cb:
-        if st.button("🚪 Changer", use_container_width=True):
+        if st.button("Changer   de   compte", use_container_width=True):
             for k in ["user_id","prenom","messages","conversation_initiee",
                       "profil","heure_connexion","pin_tentatives","pin_bloque_jusqu"]:
-                st.session_state[k] = None if k not in ("messages",) else []
+                st.session_state[k] = None if k not in ("messages",) else [ ]
             st.session_state.conversation_initiee = False
             st.rerun()
 
@@ -951,19 +977,19 @@ with st.sidebar:
 # ============================================================
 page = st.session_state.page
 
-if page == "🧘 Exercices":
+if page == "Exercices":
     st.markdown('<div class="page-content">', unsafe_allow_html=True)
     afficher_exercices()
     afficher_feedback(st.session_state.user_id)
     st.markdown('</div>', unsafe_allow_html=True)
 
-elif page == "📊 Tableau de bord":
+elif page == "Tableau de bord":
     st.markdown('<div class="page-content">', unsafe_allow_html=True)
     afficher_dashboard(st.session_state.user_id, prenom)
     afficher_feedback(st.session_state.user_id)
     st.markdown('</div>', unsafe_allow_html=True)
 
-elif page == "🔒 Confidentialité":
+elif page == "Confidentialité":
     st.markdown('<div class="page-content">', unsafe_allow_html=True)
     afficher_confidentialite()
     st.markdown('</div>', unsafe_allow_html=True)
