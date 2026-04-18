@@ -45,10 +45,10 @@ DUREE_SESSION_HEURES = 2
 # ============================================================
 def salutation_heure() -> str:
     h = datetime.now().hour
-    if 5 <= h < 12:    return "Bonjour"
-    elif 12 <= h < 18: return "Bon après-midi"
-    elif 18 <= h < 22: return "Bonsoir"
-    else:              return "Bonne nuit"
+    if 5 <= h < 12:    return "Bonjour on dit quoi ?"
+    elif 12 <= h < 18: return "Salut on dit quoi ?"
+    elif 18 <= h < 22: return "Bonsoir on dit quoi ?"
+    else:              return "Salut on dit quoi ?"
 
 # ============================================================
 # 3. PROMPT
